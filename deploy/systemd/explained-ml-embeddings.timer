@@ -1,0 +1,11 @@
+[Unit]
+Description=Timer for embed newly published articles into redis
+
+[Timer]
+OnCalendar=hourly
+# A laptop that was asleep catches up once rather than never.
+Persistent=true
+RandomizedDelaySec=300
+
+[Install]
+WantedBy=timers.target

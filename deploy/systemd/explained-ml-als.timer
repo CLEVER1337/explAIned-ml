@@ -1,0 +1,11 @@
+[Unit]
+Description=Timer for train implicit als and write candidate lists
+
+[Timer]
+OnCalendar=*-*-* 03:30:00
+# A laptop that was asleep catches up once rather than never.
+Persistent=true
+RandomizedDelaySec=300
+
+[Install]
+WantedBy=timers.target

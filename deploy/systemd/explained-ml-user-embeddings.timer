@@ -1,0 +1,11 @@
+[Unit]
+Description=Timer for rebuild user embedding centroids
+
+[Timer]
+OnCalendar=hourly
+# A laptop that was asleep catches up once rather than never.
+Persistent=true
+RandomizedDelaySec=300
+
+[Install]
+WantedBy=timers.target

@@ -1,0 +1,19 @@
+[Unit]
+Description=Refresh rec:trending:top100 from ClickHouse
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=clever
+WorkingDirectory=/home/clever/Documents/explAIned/explAIned-ml
+EnvironmentFile=-/etc/explained-ml.env
+# Every job is a plain module invocation that runs standalone. Nothing here depends on an
+# orchestrator, so a backfill or a debugging run is the same command a timer fires.
+ExecStart=/usr/bin/poetry run python -m explained_ml.jobs.update_trending
+# 1 means "nothing to do" — an empty input is not a failure and must not mark the unit failed,
+# or every quiet hour pages someone.
+SuccessExitStatus=0 1
+
+[Install]
+WantedBy=multi-user.target
