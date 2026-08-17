@@ -1,0 +1,34 @@
+# The offline jobs. Separate from the ranking image because of what it has to carry: torch,
+# sentence-transformers and the SBERT weights turn a ~200 MB image into several gigabytes, and
+# the service that answers /rank in 40 ms has no use for any of it.
+FROM python:3.13-slim
+
+ENV PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1 \
+    POETRY_VIRTUALENVS_CREATE=false \
+    HF_HOME=/opt/hf
+
+WORKDIR /app
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends build-essential \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN pip install "poetry>=1.8"
+
+COPY pyproject.toml poetry.lock* ./
+COPY packages/feature_store/pyproject.toml ./packages/feature_store/
+COPY packages/feature_store/src ./packages/feature_store/src
+RUN poetry install --only main,jobs --no-root
+
+COPY src ./src
+RUN poetry install --only-root
+
+# Bake the weights in. Without this the first hourly timer downloads ~470 MB inside its own
+# runtime, which looks exactly like a hung job.
+RUN python -c "from sentence_transformers import SentenceTransformer; \
+SentenceTransformer('sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2')"
+
+# No CMD: this image is run one job at a time.
+#   docker run --rm explained-ml-jobs python -m explained_ml.jobs.update_trending
+ENTRYPOINT ["python"]
