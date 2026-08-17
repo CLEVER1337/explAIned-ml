@@ -1,0 +1,31 @@
+[tool.poetry]
+name = "feature-store"
+version = "0.1.0"
+description = "Feature definitions shared by train_lightgbm.py and the ranking service (:8002)"
+authors = ["explAIned"]
+packages = [{ include = "feature_store", from = "src" }]
+
+[tool.poetry.dependencies]
+python = ">=3.12,<3.14"
+# numpy only, on purpose: this package must be importable from both the 2.5 GB training
+# image and the slim ranking image. I/O (Redis, ClickHouse, HTTP) belongs to explained_ml.
+numpy = "^2.1"
+
+[tool.poetry.group.dev.dependencies]
+pytest = "^8.3"
+ruff = "^0.7"
+
+[build-system]
+requires = ["poetry-core>=1.9"]
+build-backend = "poetry.core.masonry.api"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+
+[tool.ruff]
+line-length = 110
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]
