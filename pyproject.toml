@@ -1,0 +1,74 @@
+[tool.poetry]
+name = "explained-ml"
+version = "0.1.0"
+description = "Ranking service (:8002), feature store and offline jobs for the explAIned recommendation loop"
+authors = ["explAIned"]
+packages = [{ include = "explained_ml", from = "src" }]
+
+[tool.poetry.dependencies]
+# torch (via sentence-transformers) publishes no cp314 wheels; stay where explAIned-faiss is.
+python = ">=3.12,<3.14"
+numpy = "^2.1"
+fastapi = "^0.115"
+uvicorn = { extras = ["standard"], version = "^0.32" }
+redis = "^5.2"
+httpx = "^0.27"
+pydantic = "^2.9"
+pydantic-settings = "^2.6"
+prometheus-fastapi-instrumentator = "^7.0"
+# main, not a group: the ranking service loads the booster and resolves the alias at startup.
+lightgbm = "^4.5"
+mlflow = "^3.1"
+feature-store = { path = "packages/feature_store", develop = true }
+
+[tool.poetry.group.jobs]
+# Only the offline jobs need these; the ranking image does not install this group.
+optional = true
+
+[tool.poetry.group.jobs.dependencies]
+sentence-transformers = "^3.3"
+# Without the explicit CPU source poetry resolves the CUDA build: ~2.5 GB on a machine
+# that has no GPU, and a lock file that takes minutes instead of seconds.
+torch = { version = "^2.5", source = "pytorch-cpu" }
+implicit = "^0.7"
+scipy = "^1.14"
+pandas = "^2.2"
+
+[tool.poetry.group.dev.dependencies]
+pytest = "^8.3"
+pytest-asyncio = "^0.24"
+ruff = "^0.7"
+# No HTTP-mocking library: httpx ships MockTransport, and the client takes an injected
+# AsyncClient anyway. One less dependency for the same coverage.
+
+[[tool.poetry.source]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+priority = "explicit"
+
+[tool.poetry.scripts]
+embeddings = "explained_ml.jobs.embeddings:cli"
+build-user-embeddings = "explained_ml.jobs.build_user_embeddings:cli"
+update-trending = "explained_ml.jobs.update_trending:cli"
+build-features = "explained_ml.jobs.build_features:cli"
+train-als = "explained_ml.jobs.train_als:cli"
+train-lightgbm = "explained_ml.jobs.train_lightgbm:cli"
+check-env = "explained_ml.scripts.check_env:cli"
+seed-dev-corpus = "explained_ml.scripts.seed_dev_corpus:cli"
+simulate-behavior = "explained_ml.scripts.simulate_behavior:cli"
+
+[build-system]
+requires = ["poetry-core>=1.9"]
+build-backend = "poetry.core.masonry.api"
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests", "packages/feature_store/tests"]
+pythonpath = ["src", "packages/feature_store/src"]
+
+[tool.ruff]
+line-length = 110
+src = ["src", "tests", "packages/feature_store/src"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]
