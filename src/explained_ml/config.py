@@ -23,6 +23,7 @@ class Settings(BaseSettings):
 
     articles_base_url: str = "http://localhost:5036"
     identity_base_url: str = "http://localhost:5125"
+    profiles_base_url: str = "http://localhost:5066"
 
     # Fixed by paraphrase-multilingual-MiniLM-L12-v2 and by EMBEDDING_DIM in explAIned-faiss.
     embedding_dim: int = 384

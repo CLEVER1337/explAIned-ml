@@ -39,9 +39,15 @@ async def seed(
     identity_url: str,
     articles_url: str,
     users_file: Path,
+    profiles_url: str | None = None,
 ) -> int:
     identity = IdentityClient(identity_url)
     http = httpx.AsyncClient(base_url=articles_url.rstrip("/"), timeout=30.0)
+    profiles = (
+        httpx.AsyncClient(base_url=profiles_url.rstrip("/"), timeout=30.0)
+        if profiles_url
+        else None
+    )
 
     try:
         accounts = await _ensure_users(identity, users)
@@ -50,6 +56,10 @@ async def seed(
             return EXIT_INFRA
 
         logger.info("seeded %d accounts", len(accounts))
+
+        if profiles is not None:
+            named = await _name_profiles(profiles, accounts)
+            logger.info("named %d of %d profiles", named, len(accounts))
 
         published = await _publish_articles(http, accounts, generate(articles, seed_value))
         logger.info("published %d of %d articles", published, articles)
@@ -78,6 +88,8 @@ async def seed(
     finally:
         await identity.close()
         await http.aclose()
+        if profiles is not None:
+            await profiles.aclose()
 
 
 async def _ensure_users(identity: IdentityClient, count: int) -> list[SeededUser]:
@@ -146,6 +158,32 @@ async def _publish_articles(
     return published
 
 
+async def _name_profiles(profiles: httpx.AsyncClient, accounts: list) -> int:
+    named = 0
+
+    for account in accounts:
+        headers = {"Authorization": f"Bearer {account.access_token}"}
+
+        try:
+            response = await profiles.put(
+                "/profiles/me",
+                headers=headers,
+                json={"displayName": account.nickname, "bio": f"seeded account {account.nickname}"},
+            )
+        except httpx.HTTPError as exc:
+            logger.warning("profile service unreachable, leaving names unset: %s", exc)
+            return named
+
+        if response.status_code in (200, 204):
+            named += 1
+        else:
+            logger.warning(
+                "PUT /profiles/me for %s returned %s", account.email, response.status_code
+            )
+
+    return named
+
+
 def cli() -> int:
     settings = get_settings()
 
@@ -155,6 +193,12 @@ def cli() -> int:
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--identity-url", default=settings.identity_base_url)
     parser.add_argument("--articles-url", default=settings.articles_base_url)
+    parser.add_argument("--profiles-url", default=settings.profiles_base_url)
+    parser.add_argument(
+        "--no-profiles",
+        action="store_true",
+        help="skip naming profiles (use when the profile service is not running)",
+    )
     parser.add_argument("--users-file", type=Path, default=USERS_FILE)
     parser.add_argument("--log-level", default="INFO")
     args = parser.parse_args()
@@ -169,6 +213,7 @@ def cli() -> int:
             args.identity_url,
             args.articles_url,
             args.users_file,
+            profiles_url=None if args.no_profiles else args.profiles_url,
         )
     )
 
