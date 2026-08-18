@@ -25,8 +25,8 @@ class IdentityError(RuntimeError):
 class SeededUser:
     user_id: str
     email: str
-    nickname: str
     access_token: str
+    nickname: str
 
 
 class IdentityClient:
@@ -47,16 +47,14 @@ class IdentityClient:
 
     async def ensure_user(self, email: str, nickname: str, password: str) -> SeededUser:
         """Register then log in. A second run re-uses the existing account."""
-        await self._register(email, nickname, password)
+        await self._register(email, password)
         token = await self.login(email, password)
 
-        return SeededUser(user_id=subject_of(token), email=email, nickname=nickname, access_token=token)
+        return SeededUser(user_id=subject_of(token), email=email, access_token=token, nickname=nickname)
 
-    async def _register(self, email: str, nickname: str, password: str) -> None:
+    async def _register(self, email: str, password: str) -> None:
         try:
-            response = await self._client.post(
-                "/user", json={"email": email, "nickname": nickname, "password": password}
-            )
+            response = await self._client.post("/user", json={"email": email, "password": password})
         except httpx.HTTPError as exc:
             raise IdentityError(f"POST /user failed: {exc}") from exc
 
