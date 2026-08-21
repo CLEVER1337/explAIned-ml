@@ -7,15 +7,21 @@
 # weekly. Building that on every push to a branch would fill the disk to prove something a
 # test suite proves faster.
 #
-# ── Why there is no `uses:` anywhere in this file ──────────────────────────────────────
-# The `docker` label maps to a node image; this job overrides it with one that has a
-# toolchain instead. Every published action is JavaScript, and act runs them with the
-# container's own node — it does not inject one. In an image without node, even
-# actions/checkout@v4 dies at `exec: "node": executable file not found in $PATH`, and it
-# dies again in its own Post step.
+# ── Two things this file does the long way round, both for the same reason ─────────────
+# The `docker` label maps to a node image; this job overrides it with one that carries a
+# toolchain instead. That is what makes both of the following necessary.
 #
-# So the checkout is three lines of git. That is all actions/checkout does here anyway;
-# what it adds — submodules, LFS, credential persistence — none of these repositories use.
+# 1. No `uses:` anywhere. Every published action is JavaScript, and act runs them with the
+#    container's own node — it does not inject one. In an image without node even
+#    actions/checkout@v4 dies at `exec: "node": executable file not found in $PATH`, and
+#    then dies again in its own Post step. The checkout below is the handful of git
+#    commands that action would have run; submodules, LFS and credential persistence are
+#    the parts none of these repositories use.
+#
+# 2. `cd /src` inside each step rather than `working-directory:`. act sets the container
+#    workdir itself per `docker exec`, and a step-level working-directory did not survive
+#    that — the symptom was MSB1009, dotnet looking for the solution in an empty directory.
+#    A cd in the script is not subject to anyone's interpretation.
 #
 # release.yml is unaffected and still uses actions/checkout: it runs on the default node
 # image, because docker is the only toolchain it needs.
@@ -54,20 +60,26 @@ jobs:
           fi
           git clone --depth 1 --branch "$GITHUB_REF_NAME" "$url" /src
           git -C /src log -1 --oneline
+          ls /src
 
       - name: Install
-        working-directory: /src
         # --only main,dev: never the `jobs` group. That is torch and sentence-transformers,
         # ~2.5 GB, and nothing under tests/ imports either.
         run: |
+          set -eu
+          cd /src
           pip install --no-cache-dir "poetry>=1.8"
           poetry config virtualenvs.create false
           poetry install --only main,dev
 
       - name: Lint
-        working-directory: /src
-        run: ruff check .
+        run: |
+          set -eu
+          cd /src
+          ruff check .
 
       - name: Test
-        working-directory: /src
-        run: pytest -q
+        run: |
+          set -eu
+          cd /src
+          pytest -q
