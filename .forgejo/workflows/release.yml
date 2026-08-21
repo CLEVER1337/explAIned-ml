@@ -1,0 +1,109 @@
+# Release. Builds the image, pushes it, and then writes the new tag into the manifests
+# repository — which is what actually deploys, because that repository's own workflow is the
+# only thing in the system holding a kubeconfig.
+#
+# Nothing here talks to the cluster. This job's credentials are a registry token and a git
+# token, and neither can reach Kubernetes.
+#
+# Triggered by a tag, not by a merge: a push to master is a change, a tag is a decision. It
+# is also what keeps the expensive image builds off the hot path — see ci.yml.
+#
+#     git tag v1.4.0 && git push lan v1.4.0
+
+name: release
+
+on:
+  push:
+    tags: ['v*']
+
+jobs:
+  release:
+    runs-on: docker
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Log in to the registry
+        # The daemon resolves git.homelab.lan through the runner host's /etc/hosts and
+        # trusts Caddy's CA from its own trust store — neither is this container's doing.
+        run: |
+          echo "${{ secrets.REGISTRY_TOKEN }}" \
+            | docker login git.homelab.lan -u ci --password-stdin
+
+      - name: Build and push ranking-service
+        run: |
+          set -eu
+          TAG="${{ github.ref_name }}"
+          IMAGE="git.homelab.lan/ci/explained-ranking-service"
+          docker build -f Dockerfile -t "$IMAGE:$TAG" .
+          docker push "$IMAGE:$TAG"
+          echo "pushed $IMAGE:$TAG"
+
+      - name: Build and push ml-jobs
+        run: |
+          set -eu
+          TAG="${{ github.ref_name }}"
+          IMAGE="git.homelab.lan/ci/explained-ml-jobs"
+          docker build -f Dockerfile.jobs -t "$IMAGE:$TAG" .
+          docker push "$IMAGE:$TAG"
+          echo "pushed $IMAGE:$TAG"
+
+      # The hinge. One line in one file, in another repository, and the push is the deploy.
+      #
+      # Each service owns its own file under overlays/homelab/images/, so nine repositories
+      # releasing at once rewrite nine different files. The retry below is for the case
+      # where two of them land between this clone and this push: a rebase moves past a
+      # neighbour's commit cleanly, because it never touched these lines.
+      - name: Point the manifests at the new tag
+        env:
+          MANIFESTS_TOKEN: ${{ secrets.MANIFESTS_TOKEN }}
+        run: |
+          set -eu
+          TAG="${{ github.ref_name }}"
+          test -n "$MANIFESTS_TOKEN" || { echo "MANIFESTS_TOKEN secret is empty"; exit 1; }
+
+          git config --global user.name  "ci"
+          git config --global user.email "ci@homelab.lan"
+          # Not shallow. The retry below rebases onto whatever landed first, and a
+          # truncated history is exactly where that goes wrong for no gain — this
+          # repository is a few hundred kilobytes.
+          git clone \
+            "https://ci:$MANIFESTS_TOKEN@git.homelab.lan/clever/explAIned-k8s-manifests.git" \
+            /tmp/manifests
+          cd /tmp/manifests
+
+          # sed rather than `kustomize edit set image`: the file is machine-owned and has
+          # exactly one newTag line, and this avoids pulling a 20 MB binary on every
+          # release over a network where release hosts are not all reachable. The
+          # assertions are what make that safe — any change to the file's shape fails the
+          # job instead of quietly writing something wrong.
+          f="overlays/homelab/images/ranking-service/kustomization.yaml"
+          test -f "$f" || { echo "no such component: $f"; exit 1; }
+          test "$(grep -c '^    newTag: ' "$f")" = "1" || { echo "unexpected shape in $f"; exit 1; }
+          sed -i "s|^    newTag: .*|    newTag: $TAG|" "$f"
+          grep -qx "    newTag: $TAG" "$f" || { echo "rewrite did not take in $f"; exit 1; }
+
+          f="overlays/homelab/images/ml-jobs/kustomization.yaml"
+          test -f "$f" || { echo "no such component: $f"; exit 1; }
+          test "$(grep -c '^    newTag: ' "$f")" = "1" || { echo "unexpected shape in $f"; exit 1; }
+          sed -i "s|^    newTag: .*|    newTag: $TAG|" "$f"
+          grep -qx "    newTag: $TAG" "$f" || { echo "rewrite did not take in $f"; exit 1; }
+
+          if git diff --quiet; then
+            echo "already at $TAG — nothing to commit"
+            exit 0
+          fi
+
+          git add overlays/homelab/images
+          git commit -m "deploy: explAIned-ml $TAG"
+
+          for attempt in 1 2 3 4 5; do
+            if git push origin HEAD:master; then
+              echo "pushed on attempt $attempt"
+              exit 0
+            fi
+            echo "push rejected, rebasing onto whatever landed first"
+            git pull --rebase origin master
+            sleep $((attempt * 3))
+          done
+          echo "could not push after 5 attempts"
+          exit 1

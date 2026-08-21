@@ -1,0 +1,85 @@
+# Runs on every push. Builds no image, pushes nothing, touches no cluster — this is the
+# cheap check that the code still works, deliberately separate from .forgejo/workflows/
+# release.yml.
+#
+# Why the split: the release images are expensive. explAIned-ml's jobs image alone carries
+# torch and the SBERT weights, and the runner has a 10 GB disk whose layer cache is pruned
+# weekly. Building that on every push to a branch would fill the disk to prove something a
+# test suite proves faster.
+#
+# ── Two things this file does the long way round, both for the same reason ─────────────
+# The `docker` label maps to a node image; this job overrides it with one that carries a
+# toolchain instead. That is what makes both of the following necessary.
+#
+# 1. No `uses:` anywhere. Every published action is JavaScript, and act runs them with the
+#    container's own node — it does not inject one. In an image without node even
+#    actions/checkout@v4 dies at `exec: "node": executable file not found in $PATH`, and
+#    then dies again in its own Post step. The checkout below is the handful of git
+#    commands that action would have run; submodules, LFS and credential persistence are
+#    the parts none of these repositories use.
+#
+# 2. `cd /src` inside each step rather than `working-directory:`. act sets the container
+#    workdir itself per `docker exec`, and a step-level working-directory did not survive
+#    that — the symptom was MSB1009, dotnet looking for the solution in an empty directory.
+#    A cd in the script is not subject to anyone's interpretation.
+#
+# release.yml is unaffected and still uses actions/checkout: it runs on the default node
+# image, because docker is the only toolchain it needs.
+
+name: ci
+
+on:
+  push:
+    branches: [master, develop]
+
+jobs:
+  test:
+    runs-on: docker
+    container:
+      image: python:3.12-slim
+    steps:
+      - name: Checkout
+        env:
+          # Provided automatically per job, scoped to this repository. Needed because the
+          # clone is over HTTPS to a private instance; the runner already resolves
+          # git.homelab.lan and trusts Caddy's CA inside job containers.
+          TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -eu
+          # python:*-slim carries no git at all.
+          apt-get update -qq && apt-get install -y -qq --no-install-recommends git
+          rm -rf /src
+          host="${GITHUB_SERVER_URL#https://}"
+          # Credentials only when there are any. Forgejo hands a per-job token to private
+          # repositories; on a public one TOKEN is empty and an anonymous clone is correct,
+          # where "https://x-access-token:@host/..." would just be a confusing 401.
+          if [ -n "${TOKEN:-}" ]; then
+            url="https://x-access-token:${TOKEN}@${host}/${GITHUB_REPOSITORY}.git"
+          else
+            url="https://${host}/${GITHUB_REPOSITORY}.git"
+          fi
+          git clone --depth 1 --branch "$GITHUB_REF_NAME" "$url" /src
+          git -C /src log -1 --oneline
+          ls /src
+
+      - name: Install
+        # --only main,dev: never the `jobs` group. That is torch and sentence-transformers,
+        # ~2.5 GB, and nothing under tests/ imports either.
+        run: |
+          set -eu
+          cd /src
+          pip install --no-cache-dir "poetry>=1.8"
+          poetry config virtualenvs.create false
+          poetry install --only main,dev
+
+      - name: Lint
+        run: |
+          set -eu
+          cd /src
+          ruff check .
+
+      - name: Test
+        run: |
+          set -eu
+          cd /src
+          pytest -q
