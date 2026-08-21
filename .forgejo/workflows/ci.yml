@@ -1,0 +1,37 @@
+# Runs on every push. Builds nothing, pushes nothing, touches no cluster — this is the
+# cheap check that the code still works, and it is deliberately separate from the release
+# path in .forgejo/workflows/release.yml.
+#
+# Why the split: the release images are expensive. explAIned-ml's jobs image alone carries
+# torch and the SBERT weights, and the runner has a 10 GB disk whose layer cache is pruned
+# weekly. Building that on every push to a branch would fill the disk to prove something a
+# test suite proves faster.
+
+name: ci
+
+on:
+  push:
+    branches: [master, develop]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: docker
+    container:
+      image: python:3.12-slim
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install
+        # --only main,dev: never the `jobs` group. That is torch and sentence-transformers,
+        # ~2.5 GB, and no test in this repository imports either.
+        run: |
+          pip install --no-cache-dir "poetry>=1.8"
+          poetry config virtualenvs.create false
+          poetry install --only main,dev
+
+      - name: Lint
+        run: ruff check .
+
+      - name: Test
+        run: pytest -q
