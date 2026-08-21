@@ -8,7 +8,16 @@
 # Triggered by a tag, not by a merge: a push to master is a change, a tag is a decision. It
 # is also what keeps the expensive image builds off the hot path — see ci.yml.
 #
-#     git tag v1.4.0 && git push lan v1.4.0
+#     git tag v1.4.0 master && git push lan v1.4.0
+#
+# ── Why the job image is docker:cli ────────────────────────────────────────────────────
+# The runner mounts the host's docker socket into every job, but the socket is not the
+# client: the `docker` label maps to a node image, which has no `docker` binary at all and
+# fails at `docker: command not found`. This image is that binary and little else, ~15 MB.
+#
+# It follows that there is no `uses:` here either. act runs JavaScript actions with the
+# container's own node, and this image has none — actions/checkout@v4 would die exactly the
+# way it does in ci.yml. The checkout below is the few git commands it would have run.
 
 name: release
 
@@ -19,19 +28,40 @@ on:
 jobs:
   release:
     runs-on: docker
+    container:
+      image: docker:27-cli
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout
+        env:
+          # Provided automatically per job, scoped to this repository.
+          TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -eu
+          command -v git >/dev/null || apk add --no-cache git
+          rm -rf /src
+          host="${GITHUB_SERVER_URL#https://}"
+          if [ -n "${TOKEN:-}" ]; then
+            url="https://x-access-token:${TOKEN}@${host}/${GITHUB_REPOSITORY}.git"
+          else
+            url="https://${host}/${GITHUB_REPOSITORY}.git"
+          fi
+          # GITHUB_REF_NAME is the tag on a tag push, and `git clone --branch` takes a tag
+          # just as happily as a branch.
+          git clone --depth 1 --branch "$GITHUB_REF_NAME" "$url" /src
+          git -C /src log -1 --oneline
 
       - name: Log in to the registry
-        # The daemon resolves git.homelab.lan through the runner host's /etc/hosts and
-        # trusts Caddy's CA from its own trust store — neither is this container's doing.
         run: |
-          echo "${{ secrets.REGISTRY_TOKEN }}" \
-            | docker login git.homelab.lan -u ci --password-stdin
+          set -eu
+          # The name resolves and the certificate validates because the runner passes
+          # --add-host and mounts the host trust store into this container; Alpine reads the
+          # same /etc/ssl/certs path Debian does.
+          echo "${{ secrets.REGISTRY_TOKEN }}" | docker login git.homelab.lan -u ci --password-stdin
 
       - name: Build and push ranking-service
         run: |
           set -eu
+          cd /src
           TAG="${{ github.ref_name }}"
           IMAGE="git.homelab.lan/ci/explained-ranking-service"
           docker build -f Dockerfile -t "$IMAGE:$TAG" .
@@ -41,6 +71,7 @@ jobs:
       - name: Build and push ml-jobs
         run: |
           set -eu
+          cd /src
           TAG="${{ github.ref_name }}"
           IMAGE="git.homelab.lan/ci/explained-ml-jobs"
           docker build -f Dockerfile.jobs -t "$IMAGE:$TAG" .
@@ -66,6 +97,7 @@ jobs:
           # Not shallow. The retry below rebases onto whatever landed first, and a
           # truncated history is exactly where that goes wrong for no gain — this
           # repository is a few hundred kilobytes.
+          rm -rf /tmp/manifests
           git clone \
             "https://ci:$MANIFESTS_TOKEN@git.homelab.lan/clever/explAIned-k8s-manifests.git" \
             /tmp/manifests
