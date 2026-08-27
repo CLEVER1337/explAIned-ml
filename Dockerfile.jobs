@@ -3,8 +3,20 @@
 # the service that answers /rank in 40 ms has no use for any of it.
 FROM python:3.13-slim
 
+# POETRY_NO_CACHE alongside PIP_NO_CACHE_DIR, because they are two different caches and
+# only the second one was ever disabled here. Poetry keeps its own downloads under
+# /root/.cache/pypoetry, so every wheel it installed stayed in the layer next to the
+# unpacked copy — for this image that is torch twice. The build died exporting it:
+#
+#   failed to copy: /root/.cache/pypoetry/cache/repositories/.../470e8fb2....body
+#   write /var/lib/containerd/.../data: no space left on device
+#
+# The rm below is belt and braces, and has to run in the same RUN as the install: a
+# separate layer would delete the files from the filesystem while leaving them in the
+# layer above, which is where the size actually lives.
 ENV PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1 \
+    POETRY_NO_CACHE=1 \
     POETRY_VIRTUALENVS_CREATE=false \
     HF_HOME=/opt/hf
 
@@ -19,10 +31,12 @@ RUN pip install "poetry>=1.8"
 COPY pyproject.toml poetry.lock* ./
 COPY packages/feature_store/pyproject.toml ./packages/feature_store/
 COPY packages/feature_store/src ./packages/feature_store/src
-RUN poetry install --only main,jobs --no-root
+RUN poetry install --only main,jobs --no-root \
+    && rm -rf /root/.cache
 
 COPY src ./src
-RUN poetry install --only-root
+RUN poetry install --only-root \
+    && rm -rf /root/.cache
 
 # Bake the weights in. Without this the first hourly timer downloads ~470 MB inside its own
 # runtime, which looks exactly like a hung job.

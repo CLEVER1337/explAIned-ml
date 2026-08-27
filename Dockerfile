@@ -2,8 +2,13 @@
 # sentence-transformers are ~2.5 GB and this image never encodes anything.
 FROM python:3.13-slim
 
+# POETRY_NO_CACHE as well as PIP_NO_CACHE_DIR: they are two separate caches and disabling
+# pip's does nothing about /root/.cache/pypoetry, which otherwise ships every downloaded
+# wheel inside the image. Cheaper here than in Dockerfile.jobs — no torch — but the same
+# defect, and this image is the one that has to stay small.
 ENV PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1 \
+    POETRY_NO_CACHE=1 \
     POETRY_VIRTUALENVS_CREATE=false
 
 WORKDIR /app
@@ -13,10 +18,12 @@ RUN pip install "poetry>=1.8"
 COPY pyproject.toml poetry.lock* ./
 COPY packages/feature_store/pyproject.toml ./packages/feature_store/
 COPY packages/feature_store/src ./packages/feature_store/src
-RUN poetry install --only main --no-root
+RUN poetry install --only main --no-root \
+    && rm -rf /root/.cache
 
 COPY src ./src
-RUN poetry install --only-root
+RUN poetry install --only-root \
+    && rm -rf /root/.cache
 
 EXPOSE 8002
 
